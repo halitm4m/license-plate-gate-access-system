@@ -14,3 +14,13 @@ Bu dosya Codex oturumlari icin proje ici hatirlatma notudur.
 ## Bu Notun Amaci
 
 Onceki Codex islemlerinin sadece calisma agacinda kaybolmasini engellemek ve sonraki oturumlarda yapilan islerin git gecmisinden izlenebilmesini saglamak.
+
+## Python Sanal Ortam Notu
+
+- Aktif ve birlestirilmis sanal ortam proje kokundeki `.venv` dizinidir.
+- Calistirma komutu: `.venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py`
+- Bu `.venv`, Raspberry Pi sistem paketlerini gorebilmek icin `--system-site-packages` ile olusturulmustur.
+- 2026-05-24 tarihinde eski `/home/pi/projects/plate_env` ortamindaki calisan YOLO/Torch kurulumu yeni `.venv` icine tasindi; PaddleOCR kurulumu yeni `.venv` icinde korundu.
+- Dogrulanan kritik paketler: `opencv-python==4.13.0.92`, `numpy==2.3.5`, `setuptools==81.0.0`, `torch==2.12.0+cpu`, `torchvision==0.27.0+cpu`, `ultralytics==8.4.53`, `ultralytics-thop==2.0.19`, `polars==1.40.1`, `polars-runtime-32==1.40.1`, `paddleocr==2.10.0`, `paddlepaddle==3.1.1`, `matplotlib==3.10.9`, `sympy==1.14.0`, `mpmath==1.3.0`.
+- Torch/Torchvision paketleri Raspberry Pi icin CPU-only kurulumdur. Bunlari normal `pip install torch torchvision` ile ezme; gerekmedikce yeniden kurulum yapma.
+- Proje, PaddleOCR cache dosyalarini `.paddlex_cache/` ve `.paddleocr_cache/`, Matplotlib cache dosyalarini `.matplotlib_cache/` altinda tutacak sekilde ayarlidir.

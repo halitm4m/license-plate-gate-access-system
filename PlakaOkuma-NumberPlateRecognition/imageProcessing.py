@@ -25,10 +25,13 @@ DEBUG_SAVE_ENABLED = os.environ.get("PLAKA_DEBUG", "1").lower() not in ("0", "fa
 DEBUG_SAVE_EVERY_SECONDS = float(os.environ.get("PLAKA_DEBUG_INTERVAL", "2"))
 DEBUG_OUTPUT_DIR = Path(os.environ.get("PLAKA_DEBUG_DIR", "debug_frames"))
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MATPLOTLIB_CACHE_DIR = Path(os.environ.get("MPLCONFIGDIR", PROJECT_ROOT / ".matplotlib_cache"))
+MATPLOTLIB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 PADDLE_CACHE_DIR = Path(os.environ.get("PADDLE_PDX_CACHE_HOME", PROJECT_ROOT / ".paddlex_cache"))
 PADDLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 PADDLE_OCR_CACHE_DIR = Path(os.environ.get("PADDLE_OCR_BASE_DIR", PROJECT_ROOT / ".paddleocr_cache"))
 PADDLE_OCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MATPLOTLIB_CACHE_DIR))
 os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(PADDLE_CACHE_DIR))
 os.environ.setdefault("PADDLE_OCR_BASE_DIR", str(PADDLE_OCR_CACHE_DIR))
 

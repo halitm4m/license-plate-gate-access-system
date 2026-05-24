@@ -10,19 +10,15 @@
 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
 ```
 
-Gerekli Python paketleri:
+Bu projede hazirlanan aktif sanal ortam proje kokundeki `.venv` dizinidir. Ortam `--system-site-packages` ile olusturuldu; Raspberry Pi kamera/sistem paketlerini sistemden, YOLO/Torch CPU ve PaddleOCR paketlerini `.venv` icinden kullanir.
 
 ```bash
-python3 -m venv --system-site-packages .venv && .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
 ```
 
-YOLO/Torch kurulumu zaten hazırsa yalnızca PaddleOCR tarafını kurmak için:
+`requirements.txt` dosyasi bu dogrulanmis ortamin kritik paket envanteridir. Raspberry Pi icin hazirlanan `torch==2.12.0+cpu` ve `torchvision==0.27.0+cpu` paketlerini normal `pip install torch torchvision` ile ezmeyin; gerektiginde `CODEX_NOTES.md` icindeki sanal ortam notunu kontrol edin.
 
-```bash
-python3 -m venv --system-site-packages .venv && .venv/bin/python -m pip install "numpy<2.4,>=1.24" "paddleocr==2.10.0" "paddlepaddle==3.1.1"
-```
-
-Raspberry Pi OS üzerinde kamera paketi sistemden kurulmalıdır:
+Raspberry Pi OS üzerinde kamera paketi sistemden kurulmuş olmalıdır:
 
 ```bash
 sudo apt install python3-picamera2
