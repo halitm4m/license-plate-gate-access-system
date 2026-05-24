@@ -4,7 +4,7 @@
 ![aaa](https://user-images.githubusercontent.com/87595266/179367849-7d33fd32-be4f-43b3-ac47-adb27b5d861b.png)
 
 # Nasıl Çalışır
- Raspberry Pi 4 CSI/pin kamera bağlantısı için `main.py` dosyası `picamera2` kullanır. Gerekli paket kurulumları yapıldıktan sonra aşağıdaki komutla çalıştırın:
+ `main.py` önce USB kameraları OpenCV ile tarar. Görüntü alınabilen USB kamera varsa sistem bu kameraların hepsinden düzenli olarak kare alır ve kareleri eş zamanlı işler. Çalışan USB kamera yoksa Raspberry Pi CSI/pin kamera için `picamera2` fallback olarak devreye girer. Gerekli paket kurulumları yapıldıktan sonra aşağıdaki komutla çalıştırın:
 
 ```bash
 .venv/bin/python license_plate_gate_access_system/main.py
@@ -18,15 +18,21 @@ Bu projede hazirlanan aktif sanal ortam proje kokundeki `.venv` dizinidir. Ortam
 
 `requirements.txt` dosyasi bu dogrulanmis ortamin kritik paket envanteridir. Raspberry Pi icin hazirlanan `torch==2.12.0+cpu` ve `torchvision==0.27.0+cpu` paketlerini normal `pip install torch torchvision` ile ezmeyin; gerektiginde `CODEX_NOTES.md` icindeki sanal ortam notunu kontrol edin.
 
-Raspberry Pi OS üzerinde kamera paketi sistemden kurulmuş olmalıdır:
+Raspberry Pi OS üzerinde PiCamera fallback için kamera paketi sistemden kurulmuş olmalıdır:
 
 ```bash
 sudo apt install python3-picamera2
 ```
 
-Kamera önceden `libcamera-hello` ile görüntü veriyor olmalıdır.
+PiCamera kullanılacaksa kamera önceden `libcamera-hello` ile görüntü veriyor olmalıdır.
 
-Varsayılan kamera modu `2592x1944` ve `15 FPS` olarak sabitlenmiştir. Uygulama canlı video akışı yerine saniyede 2 kare yakalar ve plaka okuma işlemini bu kareler üzerinde çalıştırır.
+Varsayılan PiCamera modu `2592x1944` ve `15 FPS` olarak sabitlenmiştir. USB kameralar varsayılan olarak `1280x720` istenir; kamera farklı bir çözünürlük döndürürse terminale gerçek değer yazdırılır. Uygulama canlı video akışı yerine varsayılan olarak her kameradan saniyede 2 kare yakalar ve plaka okuma işlemini bu kareler üzerinde çalıştırır.
+
+USB kamera taraması varsayılan olarak `/dev/video0` karşılığı olan `0` indeksinden `9` indeksine kadar yapılır. USB kameralar belirli aralıklarla tekrar taranır; sonradan takılan USB kamera PiCamera fallback çalışırken de öncelik alır. Gerekirse şu değişkenlerle ayarlanabilir:
+
+```bash
+PLAKA_USB_INDEX_LIMIT=16 PLAKA_USB_RESCAN_SECONDS=5 PLAKA_USB_WIDTH=1280 PLAKA_USB_HEIGHT=720 .venv/bin/python license_plate_gate_access_system/main.py
+```
 
 Plaka tespiti için hazır YOLOv8 modeli `license_plate_gate_access_system/models/license_plate_detector.pt` yolunda bulunur. Farklı bir model kullanmak için:
 
@@ -46,7 +52,7 @@ YOLO adayları artık OCR'a gönderilmeden önce plaka benzeri oranlarla filtrel
 PLAKA_MIN_ASPECT=2.0 PLAKA_MAX_ASPECT=6.5 PLAKA_MIN_AREA=0.003 PLAKA_MAX_AREA=0.08 .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
-Terminale başarıyla okunan ve formatı doğru olan her plaka yazdırılır; aynı plaka daha önce kayıtlı olsa bile `data.txt` dosyasına yeni zaman bilgisiyle tekrar eklenir. OCR metin okuyup plaka formatını reddederse ham ve temizlenmiş OCR çıktısı da terminale basılır; böylece PaddleOCR'ın plakayı nasıl yanlış algıladığı görülebilir. YOLO plaka bulamazsa tekrar eden normal başarısızlıklar yalnızca değiştiğinde yazdırılır.
+Terminale başarıyla okunan ve formatı doğru olan her plaka kamera adıyla birlikte yazdırılır; aynı plaka daha önce kayıtlı olsa bile `data.txt` dosyasına yeni zaman bilgisiyle tekrar eklenir. Bir karede birden fazla plaka tespit edilirse her plaka ayrı kırpılır, ayrı OCR'a gönderilir ve ayrı kayıt satırı olarak yazılır. OCR metin okuyup plaka formatını reddederse ham ve temizlenmiş OCR çıktısı da terminale basılır; böylece PaddleOCR'ın plakayı nasıl yanlış algıladığı görülebilir. YOLO plaka bulamazsa tekrar eden normal başarısızlıklar yalnızca değiştiğinde yazdırılır.
 
 Kamera tarafında en iyi sonuç için kamera ve plaka sabit durmalı, plaka kadrajda tamamen görünmeli ve parlama mümkün olduğunca azaltılmalıdır. Telefon/tablet ekranından okuma yapılacaksa ekran parlaklığı ve açı sabitlenmeli; gerçek plaka okuması ekrandan okuma denemelerine göre daha güvenilir sonuç verir.
 

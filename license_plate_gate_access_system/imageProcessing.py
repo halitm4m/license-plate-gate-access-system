@@ -4,6 +4,7 @@ import os
 import save
 import shutil
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -39,9 +40,19 @@ _last_debug_save_at = 0.0
 _debug_counter = 0
 _plate_detector = None
 _paddle_ocr = None
+_debug_lock = threading.Lock()
+_detector_lock = threading.RLock()
+_ocr_lock = threading.RLock()
 
 
 def rec(img):
+    results = rec_all(img)
+    if not results:
+        return ""
+    return results[0]
+
+
+def rec_all(img):
     frame = img.copy()
     debug_started_at = time.time()
 
@@ -60,7 +71,7 @@ def rec(img):
             debug_started_at,
             error=traceback_text(exc),
         )
-        return add_debug_path(result, debug_dir)
+        return [add_debug_path(result, debug_dir)]
 
     plate_detections = get_plate_detections_for_ocr(detections, frame.shape)
     if not plate_detections:
@@ -74,10 +85,10 @@ def rec(img):
             result,
             debug_started_at,
         )
-        return add_debug_path(result, debug_dir)
+        return [add_debug_path(result, debug_dir)]
 
     try:
-        best_read = read_best_plate_from_detections(gray, plate_detections)
+        plate_reads = read_plates_from_detections(gray, plate_detections)
     except Exception as exc:
         best_detection = select_best_detection(plate_detections)
         cropped_gray = crop_plate(gray, best_detection["bbox"]) if best_detection else None
@@ -92,9 +103,9 @@ def rec(img):
             debug_started_at,
             error=traceback_text(exc),
         )
-        return add_debug_path(result, debug_dir)
+        return [add_debug_path(result, debug_dir)]
 
-    if best_read is None:
+    if not plate_reads:
         result = "plaka kirpma bos"
         debug_dir = save_debug_snapshot(
             frame,
@@ -105,21 +116,35 @@ def rec(img):
             result,
             debug_started_at,
         )
-        return add_debug_path(result, debug_dir)
+        return [add_debug_path(result, debug_dir)]
 
-    best_detection = best_read["detection"]
-    cropped_gray = best_read["cropped_gray"]
-    raw_text = best_read["raw_text"]
-    text = best_read["cleaned_text"]
-    normalized_text = best_read["normalized_text"]
-    cropped_ocr = best_read["cropped_ocr"]
-    ocr_attempts = best_read["ocr_attempts"]
+    results = []
+    for plate_read in plate_reads:
+        plate_result = result_from_plate_read(
+            frame,
+            detections,
+            plate_read,
+            debug_started_at,
+        )
+        results.append(plate_result)
+
+    return results
+
+
+def result_from_plate_read(frame, detections, plate_read, debug_started_at):
+    detection = plate_read["detection"]
+    cropped_gray = plate_read["cropped_gray"]
+    raw_text = plate_read["raw_text"]
+    text = plate_read["cleaned_text"]
+    normalized_text = plate_read["normalized_text"]
+    cropped_ocr = plate_read["cropped_ocr"]
+    ocr_attempts = plate_read["ocr_attempts"]
 
     if not text:
         result = "ocr metin okuyamadi"
         debug_dir = save_debug_snapshot(
             frame,
-            best_detection,
+            detection,
             detections,
             cropped_gray,
             cropped_ocr,
@@ -135,7 +160,7 @@ def rec(img):
         result = f"ocr plaka formatini reddetti: ham='{raw_text}' temiz='{text}'"
         debug_dir = save_debug_snapshot(
             frame,
-            best_detection,
+            detection,
             detections,
             cropped_gray,
             cropped_ocr,
@@ -146,14 +171,13 @@ def rec(img):
             ocr_attempts=ocr_attempts,
         )
         return add_debug_path(result, debug_dir)
-    text = normalized_text
 
-    save.write(text, print_to_terminal=False)
-    result = f"plaka kaydedildi: {text}"
+    save.write(normalized_text, print_to_terminal=False)
+    result = f"plaka kaydedildi: {normalized_text}"
 
     debug_dir = save_debug_snapshot(
         frame,
-        best_detection,
+        detection,
         detections,
         cropped_gray,
         cropped_ocr,
@@ -200,64 +224,67 @@ def is_unsafe_debug_output_dir(output_dir):
 def get_plate_detector():
     global _plate_detector
 
-    if _plate_detector is None:
-        if not YOLO_MODEL_PATH.exists():
-            raise FileNotFoundError(f"YOLO model dosyasi bulunamadi: {YOLO_MODEL_PATH}")
-        from ultralytics import YOLO
+    with _detector_lock:
+        if _plate_detector is None:
+            if not YOLO_MODEL_PATH.exists():
+                raise FileNotFoundError(f"YOLO model dosyasi bulunamadi: {YOLO_MODEL_PATH}")
+            from ultralytics import YOLO
 
-        _plate_detector = YOLO(str(YOLO_MODEL_PATH))
-    return _plate_detector
+            _plate_detector = YOLO(str(YOLO_MODEL_PATH))
+        return _plate_detector
 
 
 def get_paddle_ocr():
     global _paddle_ocr
 
-    if _paddle_ocr is None:
-        from paddleocr import PaddleOCR
-
-        try:
-            from paddleocr import TextRecognition
-        except ImportError:
-            TextRecognition = None
-
-        init_options = []
-        if TextRecognition is not None:
-            init_options.append((TextRecognition, {"model_name": "en_PP-OCRv5_mobile_rec"}))
-        init_options.extend((
-            (
-                PaddleOCR,
-                {
-                    "lang": "en",
-                    "text_detection_model_name": "PP-OCRv5_mobile_det",
-                    "text_recognition_model_name": "en_PP-OCRv5_mobile_rec",
-                    "use_doc_orientation_classify": False,
-                    "use_doc_unwarping": False,
-                    "use_textline_orientation": False,
-                    "show_log": False,
-                },
-            ),
-            (PaddleOCR, {"lang": "en", "use_angle_cls": True, "show_log": False}),
-            (PaddleOCR, {"lang": "en"}),
-        ))
-        errors = []
-        for ocr_class, options in init_options:
-            try:
-                _paddle_ocr = ocr_class(**options)
-                break
-            except (TypeError, ValueError) as exc:
-                errors.append(str(exc))
+    with _ocr_lock:
         if _paddle_ocr is None:
-            raise RuntimeError(f"PaddleOCR baslatilamadi: {' | '.join(errors)}")
-    return _paddle_ocr
+            from paddleocr import PaddleOCR
+
+            try:
+                from paddleocr import TextRecognition
+            except ImportError:
+                TextRecognition = None
+
+            init_options = []
+            if TextRecognition is not None:
+                init_options.append((TextRecognition, {"model_name": "en_PP-OCRv5_mobile_rec"}))
+            init_options.extend((
+                (
+                    PaddleOCR,
+                    {
+                        "lang": "en",
+                        "text_detection_model_name": "PP-OCRv5_mobile_det",
+                        "text_recognition_model_name": "en_PP-OCRv5_mobile_rec",
+                        "use_doc_orientation_classify": False,
+                        "use_doc_unwarping": False,
+                        "use_textline_orientation": False,
+                        "show_log": False,
+                    },
+                ),
+                (PaddleOCR, {"lang": "en", "use_angle_cls": True, "show_log": False}),
+                (PaddleOCR, {"lang": "en"}),
+            ))
+            errors = []
+            for ocr_class, options in init_options:
+                try:
+                    _paddle_ocr = ocr_class(**options)
+                    break
+                except (TypeError, ValueError) as exc:
+                    errors.append(str(exc))
+            if _paddle_ocr is None:
+                raise RuntimeError(f"PaddleOCR baslatilamadi: {' | '.join(errors)}")
+        return _paddle_ocr
 
 
 def detect_license_plates(frame):
     model = get_plate_detector()
-    result = model.predict(
-        frame,
-        conf=YOLO_CONFIDENCE_THRESHOLD,
-        verbose=False,
-    )[0]
+    with _detector_lock:
+        result = model.predict(
+            frame,
+            conf=YOLO_CONFIDENCE_THRESHOLD,
+            verbose=False,
+        )[0]
     detections = []
     frame_height, frame_width = frame.shape[:2]
 
@@ -338,7 +365,18 @@ def detection_priority(detection):
 
 
 def read_best_plate_from_detections(gray, detections):
-    fallback = None
+    reads = read_plates_from_detections(gray, detections)
+    if not reads:
+        return None
+
+    valid_reads = [read for read in reads if read["normalized_text"]]
+    if valid_reads:
+        return valid_reads[0]
+    return max(reads, key=ocr_fallback_score)
+
+
+def read_plates_from_detections(gray, detections):
+    reads = []
 
     for index, detection in enumerate(detections):
         cropped_gray = crop_plate(gray, detection["bbox"])
@@ -361,12 +399,9 @@ def read_best_plate_from_detections(gray, detections):
             "cropped_ocr": cropped_ocr,
             "ocr_attempts": ocr_attempts,
         }
-        if normalized_text:
-            return read
-        if fallback is None or ocr_fallback_score(read) > ocr_fallback_score(fallback):
-            fallback = read
+        reads.append(read)
 
-    return fallback
+    return reads
 
 
 def ocr_fallback_score(read):
@@ -522,7 +557,8 @@ def read_plate_text(candidates):
     ocr = get_paddle_ocr()
 
     for candidate_name, candidate_image in candidates:
-        raw_text, confidence = run_paddle_ocr(ocr, candidate_image)
+        with _ocr_lock:
+            raw_text, confidence = run_paddle_ocr(ocr, candidate_image)
         cleaned_text = clean_ocr_text(raw_text)
         attempts.append({
             "candidate": candidate_name,
@@ -662,10 +698,11 @@ def save_debug_snapshot(
     error=None,
     force=False,
 ):
-    if not should_save_debug_snapshot(force):
-        return None
+    with _debug_lock:
+        if not should_save_debug_snapshot(force):
+            return None
+        debug_dir = make_debug_dir(started_at)
 
-    debug_dir = make_debug_dir(started_at)
     annotated = frame.copy()
     draw_debug_detections(annotated, detections, plate_detection)
 
