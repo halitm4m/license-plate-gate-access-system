@@ -1,5 +1,5 @@
-# PlakaOkuma-NumberPlateRecognition
- YOLOv8 ile plaka tespiti/kırpma ve PaddleOCR kullanılarak oluşturulmuş plaka okuma sistemi. Okunan plakalar aynı dizinde kayıtlı data.txt dosyasına zaman bilgisi eklenerek kaydedilmektedir.
+# License Plate Gate Access System
+ YOLOv8 ile plaka tespiti/kırpma ve PaddleOCR kullanılarak oluşturulmuş license plate gate access system. Okunan plakalar aynı dizinde kayıtlı data.txt dosyasına zaman bilgisi eklenerek kaydedilmektedir.
  
 ![aaa](https://user-images.githubusercontent.com/87595266/179367849-7d33fd32-be4f-43b3-ac47-adb27b5d861b.png)
 
@@ -7,13 +7,13 @@
  Raspberry Pi 4 CSI/pin kamera bağlantısı için `main.py` dosyası `picamera2` kullanır. Gerekli paket kurulumları yapıldıktan sonra aşağıdaki komutla çalıştırın:
 
 ```bash
-.venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+.venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 Bu projede hazirlanan aktif sanal ortam proje kokundeki `.venv` dizinidir. Ortam `--system-site-packages` ile olusturuldu; Raspberry Pi kamera/sistem paketlerini sistemden, YOLO/Torch CPU ve PaddleOCR paketlerini `.venv` icinden kullanir.
 
 ```bash
-.venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+.venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 `requirements.txt` dosyasi bu dogrulanmis ortamin kritik paket envanteridir. Raspberry Pi icin hazirlanan `torch==2.12.0+cpu` ve `torchvision==0.27.0+cpu` paketlerini normal `pip install torch torchvision` ile ezmeyin; gerektiginde `CODEX_NOTES.md` icindeki sanal ortam notunu kontrol edin.
@@ -28,22 +28,22 @@ Kamera önceden `libcamera-hello` ile görüntü veriyor olmalıdır.
 
 Varsayılan kamera modu `2592x1944` ve `15 FPS` olarak sabitlenmiştir. Uygulama canlı video akışı yerine saniyede 2 kare yakalar ve plaka okuma işlemini bu kareler üzerinde çalıştırır.
 
-Plaka tespiti için hazır YOLOv8 modeli `PlakaOkuma-NumberPlateRecognition/models/license_plate_detector.pt` yolunda bulunur. Farklı bir model kullanmak için:
+Plaka tespiti için hazır YOLOv8 modeli `license_plate_gate_access_system/models/license_plate_detector.pt` yolunda bulunur. Farklı bir model kullanmak için:
 
 ```bash
-PLAKA_YOLO_MODEL=/path/to/license_plate_detector.pt .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_YOLO_MODEL=/path/to/license_plate_detector.pt .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 YOLO güven eşiği varsayılan olarak `0.25` değerindedir. Değiştirmek için:
 
 ```bash
-PLAKA_YOLO_CONF=0.4 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_YOLO_CONF=0.4 .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 YOLO adayları artık OCR'a gönderilmeden önce plaka benzeri oranlarla filtrelenir. Varsayılan olarak kutu en-boy oranı `2.0-6.5`, kare alan oranı ise `0.003-0.08` arasında olmalıdır. Gerekirse şu değişkenlerle ayarlanabilir:
 
 ```bash
-PLAKA_MIN_ASPECT=2.0 PLAKA_MAX_ASPECT=6.5 PLAKA_MIN_AREA=0.003 PLAKA_MAX_AREA=0.08 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_MIN_ASPECT=2.0 PLAKA_MAX_ASPECT=6.5 PLAKA_MIN_AREA=0.003 PLAKA_MAX_AREA=0.08 .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 Terminale başarıyla okunan ve formatı doğru olan her plaka yazdırılır; aynı plaka daha önce kayıtlı olsa bile `data.txt` dosyasına yeni zaman bilgisiyle tekrar eklenir. OCR metin okuyup plaka formatını reddederse ham ve temizlenmiş OCR çıktısı da terminale basılır; böylece PaddleOCR'ın plakayı nasıl yanlış algıladığı görülebilir. YOLO plaka bulamazsa tekrar eden normal başarısızlıklar yalnızca değiştiğinde yazdırılır.
@@ -67,19 +67,19 @@ metadata.json             OCR çıktısı, sonuç ve seçilen YOLO kutusu bilgil
 Debug kaydı her 2 saniyede bir yapılır; başarılı plaka okumaları ayrıca her zaman kaydedilir. Kapatmak için:
 
 ```bash
-PLAKA_DEBUG=0 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_DEBUG=0 .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 Kayıt aralığını değiştirmek için:
 
 ```bash
-PLAKA_DEBUG_INTERVAL=5 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_DEBUG_INTERVAL=5 .venv/bin/python license_plate_gate_access_system/main.py
 ```
 
 Kayıt klasörünü değiştirmek için:
 
 ```bash
-PLAKA_DEBUG_DIR=/tmp/plaka_debug .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+PLAKA_DEBUG_DIR=/tmp/plaka_debug .venv/bin/python license_plate_gate_access_system/main.py
 ```
 # Youtube Önizleme Videosu
  https://youtu.be/HI5iR_xi_zY
