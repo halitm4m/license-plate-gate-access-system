@@ -1,13 +1,13 @@
 import datetime
-from time import time
+from pathlib import Path
 
-def write(message):
-    f = open("data.txt", "r")
-    result = f.read().find(message)
-    f.close()
-    if result ==-1:
-        time = datetime.datetime.now()
-        f = open("data.txt","a")    
-        f.write(message +" ")
-        f.write(str(time)+"\n")
-        f.close
+DATA_FILE = Path(__file__).with_name("data.txt")
+
+def write(message, print_to_terminal=True):
+    time = datetime.datetime.now()
+    line = message + " " + str(time)
+    with open(DATA_FILE, "a") as f:
+        f.write(line + "\n")
+    if print_to_terminal:
+        print(line, flush=True)
+    return True

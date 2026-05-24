@@ -1,9 +1,89 @@
 # PlakaOkuma-NumberPlateRecognition
- Python OpenCV ve EasyOCR kullanılarak oluşturulmuş plaka okuma sistemi. Okunan plakalar aynı dizinde kayıtlı data.txt dosyasına zaman bilgisi eklenerek kaydedilmektedir.
+ YOLOv8 ile plaka tespiti/kırpma ve PaddleOCR kullanılarak oluşturulmuş plaka okuma sistemi. Okunan plakalar aynı dizinde kayıtlı data.txt dosyasına zaman bilgisi eklenerek kaydedilmektedir.
  
 ![aaa](https://user-images.githubusercontent.com/87595266/179367849-7d33fd32-be4f-43b3-ac47-adb27b5d861b.png)
 
 # Nasıl Çalışır
- Gerekli paket kurulumları yapıldıktan sonra main.py dosyasını çalıştırın.
+ Raspberry Pi 4 CSI/pin kamera bağlantısı için `main.py` dosyası `picamera2` kullanır. Gerekli paket kurulumları yapıldıktan sonra aşağıdaki komutla çalıştırın:
+
+```bash
+.venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+Gerekli Python paketleri:
+
+```bash
+python3 -m venv --system-site-packages .venv && .venv/bin/python -m pip install -r requirements.txt
+```
+
+YOLO/Torch kurulumu zaten hazırsa yalnızca PaddleOCR tarafını kurmak için:
+
+```bash
+python3 -m venv --system-site-packages .venv && .venv/bin/python -m pip install "numpy<2.4,>=1.24" "paddleocr==2.10.0" "paddlepaddle==3.1.1"
+```
+
+Raspberry Pi OS üzerinde kamera paketi sistemden kurulmalıdır:
+
+```bash
+sudo apt install python3-picamera2
+```
+
+Kamera önceden `libcamera-hello` ile görüntü veriyor olmalıdır.
+
+Varsayılan kamera modu `2592x1944` ve `15 FPS` olarak sabitlenmiştir. Uygulama canlı video akışı yerine saniyede 2 kare yakalar ve plaka okuma işlemini bu kareler üzerinde çalıştırır.
+
+Plaka tespiti için hazır YOLOv8 modeli `PlakaOkuma-NumberPlateRecognition/models/license_plate_detector.pt` yolunda bulunur. Farklı bir model kullanmak için:
+
+```bash
+PLAKA_YOLO_MODEL=/path/to/license_plate_detector.pt .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+YOLO güven eşiği varsayılan olarak `0.25` değerindedir. Değiştirmek için:
+
+```bash
+PLAKA_YOLO_CONF=0.4 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+YOLO adayları artık OCR'a gönderilmeden önce plaka benzeri oranlarla filtrelenir. Varsayılan olarak kutu en-boy oranı `2.0-6.5`, kare alan oranı ise `0.003-0.08` arasında olmalıdır. Gerekirse şu değişkenlerle ayarlanabilir:
+
+```bash
+PLAKA_MIN_ASPECT=2.0 PLAKA_MAX_ASPECT=6.5 PLAKA_MIN_AREA=0.003 PLAKA_MAX_AREA=0.08 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+Terminale başarıyla okunan ve formatı doğru olan her plaka yazdırılır; aynı plaka daha önce kayıtlı olsa bile `data.txt` dosyasına yeni zaman bilgisiyle tekrar eklenir. OCR metin okuyup plaka formatını reddederse ham ve temizlenmiş OCR çıktısı da terminale basılır; böylece PaddleOCR'ın plakayı nasıl yanlış algıladığı görülebilir. YOLO plaka bulamazsa tekrar eden normal başarısızlıklar yalnızca değiştiğinde yazdırılır.
+
+Kamera tarafında en iyi sonuç için kamera ve plaka sabit durmalı, plaka kadrajda tamamen görünmeli ve parlama mümkün olduğunca azaltılmalıdır. Telefon/tablet ekranından okuma yapılacaksa ekran parlaklığı ve açı sabitlenmeli; gerçek plaka okuması ekrandan okuma denemelerine göre daha güvenilir sonuç verir.
+
+## OpenCV / OCR hata ayıklama
+
+Uygulama varsayılan olarak `debug_frames/` klasörüne örnek kareler kaydeder. Program her başlatıldığında eski `debug_frames/` içeriği temizlenir ve yalnızca yeni çalıştırmanın debug görüntüleri saklanır. Her kayıt klasöründe şu dosyalar bulunur:
+
+```text
+01_frame_raw.jpg          Kameradan gelen tam kare
+03_frame_annotated.jpg    YOLO plaka kutuları ve seçilen plaka kutusu
+04_crop_gray.jpg          YOLO'nun plaka diye kırptığı gri görüntü
+05_crop_ocr_input.jpg     PaddleOCR'a verilen görüntü
+metadata.json             OCR çıktısı, sonuç ve seçilen YOLO kutusu bilgileri
+```
+
+`03_frame_annotated.jpg` içinde yeşil kutu doğru plakayı göstermiyorsa sorun YOLO tespit/kırpma tarafındadır. Yeşil kutu ve `04_crop_gray.jpg` doğru plakayı gösteriyor ama `metadata.json` içindeki `raw_ocr` yanlışsa sorun OCR veya OCR ön işleme tarafındadır.
+
+Debug kaydı her 2 saniyede bir yapılır; başarılı plaka okumaları ayrıca her zaman kaydedilir. Kapatmak için:
+
+```bash
+PLAKA_DEBUG=0 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+Kayıt aralığını değiştirmek için:
+
+```bash
+PLAKA_DEBUG_INTERVAL=5 .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
+
+Kayıt klasörünü değiştirmek için:
+
+```bash
+PLAKA_DEBUG_DIR=/tmp/plaka_debug .venv/bin/python PlakaOkuma-NumberPlateRecognition/main.py
+```
 # Youtube Önizleme Videosu
  https://youtu.be/HI5iR_xi_zY

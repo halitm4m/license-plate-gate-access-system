@@ -43,6 +43,8 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.paddleocr_cache/
+.paddlex_cache/
 nosetests.xml
 coverage.xml
 *.cover
@@ -50,6 +52,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+
+# Application debug output
+debug_frames/
 
 # Translations
 *.mo
