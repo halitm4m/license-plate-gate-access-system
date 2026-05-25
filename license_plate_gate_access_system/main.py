@@ -37,6 +37,8 @@ CAMERA_CONTROLS = {
     "AwbEnable": True,
 }
 failure_log_index = 0
+failure_log_text_length = 0
+failure_log_line_active = False
 
 
 class NativeStderrSilencer:
@@ -341,7 +343,7 @@ def log_camera_started(name, width, height, **settings):
     for key, value in settings.items():
         if value is not None:
             parts.append(f"{key}={value}")
-    print(" ".join(parts), flush=True)
+    print_terminal_line(" ".join(parts))
 
 
 def apply_optional_camera_controls(camera):
@@ -375,10 +377,27 @@ def has_debug_snapshot(result):
 
 
 def log_failure_count(_source_name, failure_count):
-    global failure_log_index
+    global failure_log_index, failure_log_text_length, failure_log_line_active
+
+    if failure_count == failure_log_index:
+        return
 
     failure_log_index = failure_count
-    print(f"BD: {failure_log_index}", flush=True)
+    text = f"BD: {failure_log_index}"
+    padding = " " * max(0, failure_log_text_length - len(text))
+    print(f"\r{text}{padding}", end="", flush=True)
+    failure_log_text_length = len(text)
+    failure_log_line_active = True
+
+
+def print_terminal_line(message):
+    global failure_log_text_length, failure_log_line_active
+
+    if failure_log_line_active:
+        print()
+        failure_log_line_active = False
+        failure_log_text_length = 0
+    print(message, flush=True)
 
 
 def handle_plate_read(_source_name, result, gate_led):
@@ -387,12 +406,12 @@ def handle_plate_read(_source_name, result, gate_led):
         return
 
     if is_plate_whitelisted(plate):
-        print(f"++ {plate}", flush=True)
+        print_terminal_line(f"++ {plate}")
         gate_led.approve()
         return
 
     save.write(plate, print_to_terminal=False)
-    print(f"-- {plate}", flush=True)
+    print_terminal_line(f"-- {plate}")
 
 
 def get_plate_from_success_result(result):

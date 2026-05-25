@@ -20,7 +20,7 @@ Onceki Codex islemlerinin sadece calisma agacinda kaybolmasini engellemek ve son
 - Terminale kamera baslangic ayarlari disinda yalnizca plaka sonuc ve basarisiz deneme loglari yazilmalidir.
 - Onayli plaka log formati: `++ 34PAS98`.
 - Onaysiz plaka log formati: `-- 04ASD89`.
-- Basarisiz deneme log formati: `BD: 2`.
+- Basarisiz deneme log formati: `BD: 2`; bu sayac terminalde yeni satir basmadan ayni satirda guncellenmelidir. Sayi degistiginde eski deger silinip yerine yeni deger yazilir.
 - Terminale traceback, hata ayrintisi, GPIO durumu, kamera devreden cikti mesaji veya baska aciklama yazdirilmamalidir.
 - Bu terminal loglama sistemi kullanici acikca istemedikce degistirilmemelidir.
 
