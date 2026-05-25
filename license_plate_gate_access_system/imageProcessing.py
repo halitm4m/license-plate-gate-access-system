@@ -1,7 +1,6 @@
 import cv2
 import json
 import os
-import save
 import shutil
 import re
 import threading
@@ -172,8 +171,7 @@ def result_from_plate_read(frame, detections, plate_read, debug_started_at):
         )
         return add_debug_path(result, debug_dir)
 
-    save.write(normalized_text, print_to_terminal=False)
-    result = f"plaka kaydedildi: {normalized_text}"
+    result = f"plaka okundu: {normalized_text}"
 
     debug_dir = save_debug_snapshot(
         frame,

@@ -1,9 +1,16 @@
 import concurrent.futures
+import logging
+import os
+
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("PADDLE_LOG_LEVEL", "ERROR")
+logging.disable(logging.CRITICAL)
+
 import cv2
 import imageProcessing as imgprocess
-import os
+import save
 import time
-import traceback
+from pathlib import Path
 
 
 CAMERA_FORMAT = "RGB888"
@@ -13,16 +20,23 @@ USB_CAMERA_RESOLUTION = (
     int(os.environ.get("PLAKA_USB_HEIGHT", "720")),
 )
 FRAME_CAPTURE_INTERVAL_SECONDS = float(os.environ.get("PLAKA_FRAME_INTERVAL", "0.5"))
-ERROR_LOG_INTERVAL_SECONDS = 5
 USB_CAMERA_RESCAN_SECONDS = float(os.environ.get("PLAKA_USB_RESCAN_SECONDS", "5"))
 USB_CAMERA_INDEX_LIMIT = int(os.environ.get("PLAKA_USB_INDEX_LIMIT", "10"))
 USB_CAMERA_READ_FAILURE_LIMIT = int(os.environ.get("PLAKA_USB_READ_FAILURE_LIMIT", "3"))
-SUCCESS_RESULT_PREFIX = "plaka kaydedildi: "
+SUCCESS_RESULT_PREFIX = "plaka okundu: "
+WHITELIST_FILE = Path(os.environ.get(
+    "PLAKA_WHITELIST_FILE",
+    Path(__file__).with_name("whitelist.txt"),
+))
+LED_GPIO_PIN = int(os.environ.get("PLAKA_LED_GPIO_PIN", "17"))
+FIXED_APPROVAL_GPIO_PIN = 27
+LED_ON_SECONDS = float(os.environ.get("PLAKA_LED_ON_SECONDS", "5"))
 CAMERA_CONTROLS = {
     "FrameRate": float(os.environ.get("PLAKA_CAMERA_FPS", "15.0")),
     "AeEnable": True,
     "AwbEnable": True,
 }
+failure_log_index = 0
 
 
 class CameraReadError(Exception):
@@ -65,12 +79,45 @@ class PiCameraSource:
         self.camera.close()
 
 
+class GateLed:
+    def __init__(self, gpio_pin):
+        self.gpio_pin = gpio_pin
+        self.fixed_output_gpio_pin = FIXED_APPROVAL_GPIO_PIN
+        self.gpio = None
+        try:
+            import RPi.GPIO as GPIO
+
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(self.gpio_pin, GPIO.OUT, initial=GPIO.LOW)
+            GPIO.setup(self.fixed_output_gpio_pin, GPIO.OUT, initial=GPIO.HIGH)
+            self.gpio = GPIO
+        except Exception:
+            pass
+
+    def approve(self):
+        if self.gpio is None:
+            return
+        self.gpio.output(self.gpio_pin, self.gpio.HIGH)
+        time.sleep(LED_ON_SECONDS)
+        self.gpio.output(self.gpio_pin, self.gpio.LOW)
+
+    def close(self):
+        if self.gpio is None:
+            return
+        try:
+            self.gpio.output(self.gpio_pin, self.gpio.LOW)
+            self.gpio.cleanup(self.gpio_pin)
+            self.gpio.cleanup(self.fixed_output_gpio_pin)
+        except Exception:
+            pass
+
+
 def main():
     imgprocess.prepare_debug_output_dir()
     sources = {}
     source_failures = {}
-    last_error_log_at = 0.0
     last_usb_scan_at = 0.0
+    gate_led = GateLed(LED_GPIO_PIN)
 
     try:
         sources = start_available_cameras()
@@ -84,10 +131,6 @@ def main():
                     sources = start_picamera_fallback()
 
             if not sources:
-                last_error_log_at = log_message_if_due(
-                    last_error_log_at,
-                    "Calisan USB kamera veya PiCamera bulunamadi.",
-                )
                 wait_for_next_frame(frame_started_at)
                 continue
 
@@ -95,9 +138,9 @@ def main():
                 source_results = process_sources(sources.values())
                 for source_name, results in source_results:
                     for result in results:
-                        handle_result(source_name, result, source_failures)
+                        handle_result(source_name, result, source_failures, gate_led)
             except Exception:
-                last_error_log_at = log_exception_if_due(last_error_log_at)
+                pass
 
             remove_failed_usb_sources(sources)
             if not sources:
@@ -105,12 +148,12 @@ def main():
             wait_for_next_frame(frame_started_at)
     finally:
         close_sources(sources.values())
+        gate_led.close()
 
 
 def start_available_cameras():
     usb_sources = discover_usb_sources()
     if usb_sources:
-        print(f"USB kamera modu: {', '.join(sorted(usb_sources))}", flush=True)
         return usb_sources
     return start_picamera_fallback()
 
@@ -119,7 +162,6 @@ def start_picamera_fallback():
     try:
         source = start_picamera()
     except Exception:
-        print("PiCamera baslatilamadi:", traceback.format_exc().strip(), flush=True)
         return {}
     return {source.name: source}
 
@@ -181,7 +223,13 @@ def open_usb_source(index):
     source = UsbCameraSource(index, capture)
     actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"USB kamera baslatildi: {source.name}, {actual_width}x{actual_height}", flush=True)
+    log_camera_started(
+        source.name,
+        actual_width,
+        actual_height,
+        backend="V4L2",
+        fps=capture.get(cv2.CAP_PROP_FPS),
+    )
     return source
 
 
@@ -195,14 +243,12 @@ def refresh_usb_sources(sources):
         if not usb_sources:
             return sources
         close_sources(sources.values())
-        print(f"USB kamera modu: {', '.join(sorted(usb_sources))}", flush=True)
         return usb_sources
 
     current = discover_usb_sources(sources)
     removed_names = sorted(set(sources) - set(current))
     for name in removed_names:
         sources[name].close()
-        print(f"Kamera devreden cikti: {name}", flush=True)
     return current
 
 
@@ -223,11 +269,10 @@ def process_sources(sources):
             source = future_to_source[future]
             try:
                 results.append((source.name, future.result()))
-            except CameraReadError as exc:
+            except CameraReadError:
                 source.read_failures += 1
-                print(f"{exc} ({source.read_failures}/{USB_CAMERA_READ_FAILURE_LIMIT})", flush=True)
             except Exception:
-                print(f"{source.name} isleme hatasi:", traceback.format_exc().strip(), flush=True)
+                pass
     return results
 
 
@@ -245,7 +290,6 @@ def remove_failed_usb_sources(sources):
     for name in failed_names:
         sources[name].close()
         del sources[name]
-        print(f"Kamera devreden cikti: {name}", flush=True)
 
 
 def close_sources(sources):
@@ -261,10 +305,24 @@ def log_picamera_started(camera):
     main_config = configuration.get("main", {})
     width, height = main_config.get("size", CAMERA_RESOLUTION)
     pixel_format = main_config.get("format", CAMERA_FORMAT)
-    print(
-        f"PiCamera baslatildi: {width}x{height}, format={pixel_format}",
-        flush=True,
+    controls = configuration.get("controls", {})
+    fps = controls.get("FrameRate", CAMERA_CONTROLS["FrameRate"])
+    log_camera_started(
+        "picamera",
+        width,
+        height,
+        backend="Picamera2",
+        format=pixel_format,
+        fps=fps,
     )
+
+
+def log_camera_started(name, width, height, **settings):
+    parts = [f"KAMERA: {name}", f"{width}x{height}"]
+    for key, value in settings.items():
+        if value is not None:
+            parts.append(f"{key}={value}")
+    print(" ".join(parts), flush=True)
 
 
 def apply_optional_camera_controls(camera):
@@ -278,7 +336,7 @@ def apply_optional_camera_controls(camera):
             pass
 
 
-def handle_result(source_name, result, source_failures):
+def handle_result(source_name, result, source_failures, gate_led):
     if is_failure(result) and has_debug_snapshot(result):
         source_failures[source_name] = source_failures.get(source_name, 0) + 1
         log_failure_count(source_name, source_failures[source_name])
@@ -286,48 +344,60 @@ def handle_result(source_name, result, source_failures):
         return
     else:
         source_failures[source_name] = 0
-        log_success(source_name, result)
+        handle_plate_read(source_name, result, gate_led)
 
 
 def is_failure(result):
-    return result and not result.startswith("plaka ")
+    return result and not result.startswith(SUCCESS_RESULT_PREFIX)
 
 
 def has_debug_snapshot(result):
     return " | debug=" in result
 
 
-def log_failure_count(source_name, failure_count):
-    print(f"{source_name} basarisiz deneme sayisi: {failure_count}", flush=True)
+def log_failure_count(_source_name, failure_count):
+    global failure_log_index
+
+    failure_log_index = failure_count
+    print(f"BD: {failure_log_index}", flush=True)
 
 
-def log_exception_if_due(last_error_log_at):
-    now = time.monotonic()
-    if last_error_log_at and now - last_error_log_at < ERROR_LOG_INTERVAL_SECONDS:
-        return last_error_log_at
-
-    print("Son hata:", traceback.format_exc().strip(), flush=True)
-    return now
-
-
-def log_message_if_due(last_error_log_at, message):
-    now = time.monotonic()
-    if last_error_log_at and now - last_error_log_at < ERROR_LOG_INTERVAL_SECONDS:
-        return last_error_log_at
-    print(message, flush=True)
-    return now
-
-
-def log_success(source_name, result):
+def handle_plate_read(_source_name, result, gate_led):
     plate = get_plate_from_success_result(result)
-    if plate:
-        print(f"{source_name}: {plate}", flush=True)
+    if not plate:
+        return
+
+    if is_plate_whitelisted(plate):
+        print(f"++ {plate}", flush=True)
+        gate_led.approve()
+        return
+
+    save.write(plate, print_to_terminal=False)
+    print(f"-- {plate}", flush=True)
 
 
 def get_plate_from_success_result(result):
     if not result or not result.startswith(SUCCESS_RESULT_PREFIX):
         return None
     return result[len(SUCCESS_RESULT_PREFIX):].split(" | ", 1)[0]
+
+
+def is_plate_whitelisted(plate):
+    return plate in load_whitelist()
+
+
+def load_whitelist():
+    if not WHITELIST_FILE.exists():
+        return set()
+
+    plates = set()
+    with open(WHITELIST_FILE, "r", encoding="utf-8") as whitelist_file:
+        for line in whitelist_file:
+            plate = line.strip().upper().replace(" ", "")
+            if not plate or plate.startswith("#"):
+                continue
+            plates.add(plate)
+    return plates
 
 
 def wait_for_next_frame(frame_started_at):
