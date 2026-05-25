@@ -39,6 +39,18 @@ CAMERA_CONTROLS = {
 failure_log_index = 0
 
 
+class NativeStderrSilencer:
+    def __enter__(self):
+        self.original_stderr_fd = os.dup(2)
+        self.devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self.devnull_fd, 2)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        os.dup2(self.original_stderr_fd, 2)
+        os.close(self.devnull_fd)
+        os.close(self.original_stderr_fd)
+
+
 class CameraReadError(Exception):
     pass
 
@@ -206,8 +218,15 @@ def discover_usb_sources(existing_sources=None):
 
 
 def open_usb_source(index):
-    capture = cv2.VideoCapture(index, cv2.CAP_V4L2)
-    if not capture.isOpened():
+    video_device = Path(f"/dev/video{index}")
+    if not video_device.exists():
+        return None
+
+    with NativeStderrSilencer():
+        capture = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        opened = capture.isOpened()
+
+    if not opened:
         capture.release()
         return None
 
