@@ -1,6 +1,8 @@
 import concurrent.futures
 import logging
 import os
+import re
+import subprocess
 
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("PADDLE_LOG_LEVEL", "ERROR")
@@ -16,8 +18,24 @@ from pathlib import Path
 CAMERA_FORMAT = "RGB888"
 CAMERA_RESOLUTION = (2592, 1944)
 USB_CAMERA_RESOLUTION = (
-    int(os.environ.get("PLAKA_USB_WIDTH", "1280")),
-    int(os.environ.get("PLAKA_USB_HEIGHT", "720")),
+    (
+        int(os.environ["PLAKA_USB_WIDTH"]),
+        int(os.environ["PLAKA_USB_HEIGHT"]),
+    )
+    if os.environ.get("PLAKA_USB_WIDTH") and os.environ.get("PLAKA_USB_HEIGHT")
+    else None
+)
+USB_CAMERA_PROBE_RESOLUTIONS = (
+    (3840, 2160),
+    (2560, 1440),
+    (1920, 1080),
+    (1600, 1200),
+    (1280, 1024),
+    (1280, 960),
+    (1280, 720),
+    (1024, 768),
+    (800, 600),
+    (640, 480),
 )
 FRAME_CAPTURE_INTERVAL_SECONDS = float(os.environ.get("PLAKA_FRAME_INTERVAL", "0.5"))
 USB_CAMERA_RESCAN_SECONDS = float(os.environ.get("PLAKA_USB_RESCAN_SECONDS", "5"))
@@ -39,6 +57,8 @@ CAMERA_CONTROLS = {
 failure_log_index = 0
 failure_log_text_length = 0
 failure_log_line_active = False
+plate_log_key = None
+plate_log_count = 0
 
 
 class NativeStderrSilencer:
@@ -163,6 +183,7 @@ def main():
     finally:
         close_sources(sources.values())
         gate_led.close()
+        clear_inline_terminal_line()
 
 
 def start_available_cameras():
@@ -232,12 +253,8 @@ def open_usb_source(index):
         capture.release()
         return None
 
-    width, height = USB_CAMERA_RESOLUTION
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-    ok, frame = capture.read()
-    if not ok or frame is None or frame.size == 0:
+    selected_mode, frame = configure_usb_capture(capture, index)
+    if frame is None:
         capture.release()
         return None
 
@@ -249,9 +266,171 @@ def open_usb_source(index):
         actual_width,
         actual_height,
         backend="V4L2",
+        format=selected_mode.get("format"),
+        requested=selected_mode.get("requested"),
         fps=capture.get(cv2.CAP_PROP_FPS),
     )
     return source
+
+
+def configure_usb_capture(capture, index):
+    if USB_CAMERA_RESOLUTION is not None:
+        width, height = USB_CAMERA_RESOLUTION
+        apply_usb_mode(capture, {"width": width, "height": height})
+        return (
+            {
+                "width": width,
+                "height": height,
+                "requested": f"{width}x{height}",
+                "format": decode_capture_fourcc(capture.get(cv2.CAP_PROP_FOURCC)),
+            },
+            read_valid_usb_frame(capture),
+        )
+
+    supported_modes = get_supported_usb_modes(index)
+    if supported_modes:
+        selected_mode, frame = choose_working_usb_mode(capture, supported_modes)
+        if selected_mode is not None:
+            return (
+                {
+                    **selected_mode,
+                    "requested": f"{selected_mode['width']}x{selected_mode['height']}",
+                },
+                frame,
+            )
+
+    return probe_best_usb_mode(capture)
+
+
+def get_supported_usb_modes(index):
+    try:
+        result = subprocess.run(
+            ["v4l2-ctl", f"--device=/dev/video{index}", "--list-formats-ext"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return []
+
+    current_format = None
+    modes = []
+    for line in result.stdout.splitlines():
+        format_match = re.search(r"Pixel Format:\s+'([^']+)'", line)
+        if format_match:
+            current_format = format_match.group(1)
+            continue
+
+        size_match = re.search(r"Size:\s+Discrete\s+(\d+)x(\d+)", line)
+        if size_match:
+            modes.append(
+                {
+                    "format": current_format,
+                    "width": int(size_match.group(1)),
+                    "height": int(size_match.group(2)),
+                }
+            )
+
+    unique_modes = {}
+    for mode in modes:
+        key = (mode["format"], mode["width"], mode["height"])
+        unique_modes[key] = mode
+
+    return sorted(
+        unique_modes.values(),
+        key=usb_mode_sort_key,
+        reverse=True,
+    )
+
+
+def usb_mode_sort_key(mode):
+    format_priority = {
+        "MJPG": 2,
+        "YUYV": 1,
+    }
+    return (
+        mode["width"] * mode["height"],
+        format_priority.get(mode.get("format"), 0),
+        mode["width"],
+        mode["height"],
+    )
+
+
+def apply_usb_mode(capture, mode):
+    pixel_format = mode.get("format")
+    if pixel_format and len(pixel_format) == 4:
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*pixel_format))
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, mode["width"])
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, mode["height"])
+
+
+def choose_working_usb_mode(capture, modes):
+    for mode in modes:
+        apply_usb_mode(capture, mode)
+        frame = read_valid_usb_frame(capture)
+        if frame is not None:
+            return mode, frame
+    return None, None
+
+
+def read_valid_usb_frame(capture):
+    ok, frame = capture.read()
+    if not ok or frame is None or frame.size == 0:
+        return None
+    return frame
+
+
+def probe_best_usb_mode(capture):
+    best_mode = None
+    best_area = 0
+    for width, height in USB_CAMERA_PROBE_RESOLUTIONS:
+        apply_usb_mode(capture, {"width": width, "height": height})
+        frame = read_valid_usb_frame(capture)
+        if frame is None:
+            continue
+
+        actual_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        actual_area = actual_width * actual_height
+        if actual_area > best_area:
+            best_area = actual_area
+            best_mode = {
+                "width": actual_width,
+                "height": actual_height,
+                "requested": f"{width}x{height}",
+                "format": decode_capture_fourcc(capture.get(cv2.CAP_PROP_FOURCC)),
+            }
+
+    if best_mode is None:
+        apply_usb_mode(capture, {"width": 640, "height": 480})
+        return (
+            {"width": 640, "height": 480, "requested": "640x480", "format": None},
+            read_valid_usb_frame(capture),
+        )
+
+    apply_usb_mode(
+        capture,
+        {
+            "format": best_mode.get("format"),
+            "width": best_mode["width"],
+            "height": best_mode["height"],
+        },
+    )
+    return best_mode, read_valid_usb_frame(capture)
+
+
+def decode_capture_fourcc(value):
+    integer = int(value)
+    if integer <= 0:
+        return None
+
+    chars = []
+    for shift in range(4):
+        char_code = (integer >> (8 * shift)) & 0xFF
+        if char_code == 0:
+            return None
+        chars.append(chr(char_code))
+    return "".join(chars)
 
 
 def should_rescan_usb(sources, last_usb_scan_at):
@@ -377,27 +556,53 @@ def has_debug_snapshot(result):
 
 
 def log_failure_count(_source_name, failure_count):
-    global failure_log_index, failure_log_text_length, failure_log_line_active
+    global failure_log_index, plate_log_key, plate_log_count
 
     if failure_count == failure_log_index:
         return
 
     failure_log_index = failure_count
-    text = f"BD: {failure_log_index}"
-    padding = " " * max(0, failure_log_text_length - len(text))
-    print(f"\r{text}{padding}", end="", flush=True)
-    failure_log_text_length = len(text)
-    failure_log_line_active = True
+    plate_log_key = None
+    plate_log_count = 0
+    set_inline_terminal_line(f"BD: {failure_log_index}")
 
 
 def print_terminal_line(message):
+    clear_inline_terminal_line()
+    print(message, flush=True)
+
+
+def set_inline_terminal_line(message):
     global failure_log_text_length, failure_log_line_active
 
-    if failure_log_line_active:
-        print()
-        failure_log_line_active = False
-        failure_log_text_length = 0
-    print(message, flush=True)
+    padding = " " * max(0, failure_log_text_length - len(message))
+    print(f"\r{message}{padding}", end="", flush=True)
+    failure_log_text_length = len(message)
+    failure_log_line_active = True
+
+
+def clear_inline_terminal_line():
+    global failure_log_text_length, failure_log_line_active
+
+    if not failure_log_line_active:
+        return
+    print()
+    failure_log_line_active = False
+    failure_log_text_length = 0
+
+
+def log_plate_status(symbol, plate):
+    global plate_log_key, plate_log_count
+
+    key = (symbol, plate)
+    if key == plate_log_key:
+        plate_log_count += 1
+    else:
+        clear_inline_terminal_line()
+        plate_log_key = key
+        plate_log_count = 1
+
+    set_inline_terminal_line(f"{plate_log_count} {symbol} {plate}")
 
 
 def handle_plate_read(_source_name, result, gate_led):
@@ -406,12 +611,12 @@ def handle_plate_read(_source_name, result, gate_led):
         return
 
     if is_plate_whitelisted(plate):
-        print_terminal_line(f"++ {plate}")
+        log_plate_status("++", plate)
         gate_led.approve()
         return
 
     save.write(plate, print_to_terminal=False)
-    print_terminal_line(f"-- {plate}")
+    log_plate_status("--", plate)
 
 
 def get_plate_from_success_result(result):
